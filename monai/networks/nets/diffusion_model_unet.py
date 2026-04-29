@@ -429,10 +429,12 @@ class DiffusionUNetResnetBlock(nn.Module):
 
         h = self.conv1(h)
 
-        with torch.autocast(device_type=x.device.type, enabled=False):
-            temb = self.time_emb_proj(self.nonlinearity(emb.float()))
-
-        temb = temb.to(dtype=h.dtype)
+        if emb.dtype == torch.float32 and torch.is_autocast_enabled(h.device.type):
+            with torch.autocast(device_type=x.device.type, enabled=False):
+                temb = self.time_emb_proj(self.nonlinearity(emb.float()))
+            temb = temb.to(dtype=h.dtype)
+        else:
+            temb = self.time_emb_proj(self.nonlinearity(emb))
 
         if self.spatial_dims == 2:
             temb = temb[:, :, None, None]
@@ -1544,6 +1546,7 @@ class DiffusionModelUNet(nn.Module):
         num_class_embeds: if specified (as an int), then this model will be class-conditional with `num_class_embeds`
             classes.
         upcast_attention: if True, upcast attention operations to full precision.
+        upcast_embeddings: if True, upcast timestep and class embedding operations to full precision.
         dropout_cattn: if different from zero, this will be the dropout value for the cross-attention layers.
         include_fc: whether to include the final linear layer. Default to True.
         use_combined_linear: whether to use a single linear layer for qkv projection, default to False.
@@ -1568,6 +1571,7 @@ class DiffusionModelUNet(nn.Module):
         cross_attention_dim: int | None = None,
         num_class_embeds: int | None = None,
         upcast_attention: bool = False,
+        upcast_embeddings: bool = False,
         dropout_cattn: float = 0.0,
         include_fc: bool = True,
         use_combined_linear: bool = False,
@@ -1618,6 +1622,7 @@ class DiffusionModelUNet(nn.Module):
         self.attention_levels = attention_levels
         self.num_head_channels = num_head_channels
         self.with_conditioning = with_conditioning
+        self.upcast_embeddings = upcast_embeddings
 
         # input
         self.conv_in = Convolution(
@@ -1766,17 +1771,30 @@ class DiffusionModelUNet(nn.Module):
             mid_block_additional_residual: additional residual tensor for mid block (N, C, FeatureMapsDims).
         """
         # 1. time
-        with torch.autocast(device_type=x.device.type, enabled=False):
+        if self.upcast_embeddings:
+            with torch.autocast(device_type=x.device.type, enabled=False):
+                t_emb = get_timestep_embedding(timesteps, self.block_out_channels[0])
+                emb = self.time_embed(t_emb.float())
+        else:
             t_emb = get_timestep_embedding(timesteps, self.block_out_channels[0])
-            emb = self.time_embed(t_emb.float())
+            # timesteps does not contain any weights and will always return f32 tensors
+            # but time_embedding might actually be running in fp16. so we need to cast here.
+            # there might be better ways to encapsulate this.
+            t_emb = t_emb.to(dtype=x.dtype)
+            emb = self.time_embed(t_emb)
 
         # 2. class
         if self.num_class_embeds is not None:
             if class_labels is None:
                 raise ValueError("class_labels should be provided when num_class_embeds > 0")
-            with torch.autocast(device_type=x.device.type, enabled=False):
+            if self.upcast_embeddings:
+                with torch.autocast(device_type=x.device.type, enabled=False):
+                    class_emb = self.class_embedding(class_labels)
+                    emb = emb + class_emb.float()
+            else:
                 class_emb = self.class_embedding(class_labels)
-                emb = emb + class_emb.float()
+                class_emb = class_emb.to(dtype=x.dtype)
+                emb = emb + class_emb
 
         # 3. initial convolution
         h = self.conv_in(x)
