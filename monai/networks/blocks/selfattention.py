@@ -161,6 +161,8 @@ class SABlock(nn.Module):
         Return:
             torch.Tensor: B x (s_dim_1 * ... * s_dim_n) x C
         """
+        input_dtype = x.dtype
+
         if self.use_combined_linear:
             output = self.input_rearrange(self.qkv(x))
             q, k, v = output[0], output[1], output[2]
@@ -172,6 +174,7 @@ class SABlock(nn.Module):
         if self.attention_dtype is not None:
             q = q.to(self.attention_dtype)
             k = k.to(self.attention_dtype)
+            v = v.to(self.attention_dtype)
 
         if self.use_flash_attention:
             x = F.scaled_dot_product_attention(
@@ -209,6 +212,7 @@ class SABlock(nn.Module):
             att_mat = self.drop_weights(att_mat)
             x = torch.einsum("bhxy,bhyd->bhxd", att_mat, v)
 
+        x = x.to(input_dtype)
         x = self.out_rearrange(x)
         if self.include_fc:
             x = self.out_proj(x)
