@@ -158,7 +158,7 @@ class SpatialTransformer(nn.Module):
         num_layers: int = 1,
         dropout: float = 0.0,
         norm_num_groups: int = 32,
-        norm_eps: float = 1e-6,
+        norm_eps: float = 1e-5,
         cross_attention_dim: int | None = None,
         upcast_attention: bool = False,
         include_fc: bool = True,
@@ -351,7 +351,7 @@ class DiffusionUNetResnetBlock(nn.Module):
         up: bool = False,
         down: bool = False,
         norm_num_groups: int = 32,
-        norm_eps: float = 1e-6,
+        norm_eps: float = 1e-5,
     ) -> None:
         super().__init__()
         self.spatial_dims = spatial_dims
@@ -429,10 +429,15 @@ class DiffusionUNetResnetBlock(nn.Module):
 
         h = self.conv1(h)
 
+        with torch.autocast(device_type=x.device.type, enabled=False):
+            temb = self.time_emb_proj(self.nonlinearity(emb.float()))
+
+        temb = temb.to(dtype=h.dtype)
+
         if self.spatial_dims == 2:
-            temb = self.time_emb_proj(self.nonlinearity(emb))[:, :, None, None]
+            temb = temb[:, :, None, None]
         else:
-            temb = self.time_emb_proj(self.nonlinearity(emb))[:, :, None, None, None]
+            temb = temb[:, :, None, None, None]
         h = h + temb
 
         h = self.norm2(h)
@@ -467,7 +472,7 @@ class DownBlock(nn.Module):
         temb_channels: int,
         num_res_blocks: int = 1,
         norm_num_groups: int = 32,
-        norm_eps: float = 1e-6,
+        norm_eps: float = 1e-5,
         add_downsample: bool = True,
         resblock_updown: bool = False,
         downsample_padding: int = 1,
@@ -548,6 +553,7 @@ class AttnDownBlock(nn.Module):
         resblock_updown: if True use residual blocks for downsampling.
         downsample_padding: padding used in the downsampling block.
         num_head_channels: number of channels in each attention head.
+        upcast_attention: if True, upcast attention operations to full precision.
         include_fc: whether to include the final linear layer. Default to True.
         use_combined_linear: whether to use a single linear layer for qkv projection, default to False.
         use_flash_attention: if True, use Pytorch's inbuilt flash attention for a memory efficient attention mechanism
@@ -562,11 +568,12 @@ class AttnDownBlock(nn.Module):
         temb_channels: int,
         num_res_blocks: int = 1,
         norm_num_groups: int = 32,
-        norm_eps: float = 1e-6,
+        norm_eps: float = 1e-5,
         add_downsample: bool = True,
         resblock_updown: bool = False,
         downsample_padding: int = 1,
         num_head_channels: int = 1,
+        upcast_attention: bool = False,
         include_fc: bool = True,
         use_combined_linear: bool = False,
         use_flash_attention: bool = False,
@@ -596,6 +603,7 @@ class AttnDownBlock(nn.Module):
                     num_head_channels=num_head_channels,
                     norm_num_groups=norm_num_groups,
                     norm_eps=norm_eps,
+                    attention_dtype=torch.float if upcast_attention else None,
                     include_fc=include_fc,
                     use_combined_linear=use_combined_linear,
                     use_flash_attention=use_flash_attention,
@@ -680,7 +688,7 @@ class CrossAttnDownBlock(nn.Module):
         temb_channels: int,
         num_res_blocks: int = 1,
         norm_num_groups: int = 32,
-        norm_eps: float = 1e-6,
+        norm_eps: float = 1e-5,
         add_downsample: bool = True,
         resblock_updown: bool = False,
         downsample_padding: int = 1,
@@ -784,6 +792,7 @@ class AttnMidBlock(nn.Module):
         norm_num_groups: number of groups for the group normalization.
         norm_eps: epsilon for the group normalization.
         num_head_channels: number of channels in each attention head.
+        upcast_attention: if True, upcast attention operations to full precision.
         include_fc: whether to include the final linear layer. Default to True.
         use_combined_linear: whether to use a single linear layer for qkv projection, default to False.
         use_flash_attention: if True, use Pytorch's inbuilt flash attention for a memory efficient attention mechanism
@@ -796,8 +805,9 @@ class AttnMidBlock(nn.Module):
         in_channels: int,
         temb_channels: int,
         norm_num_groups: int = 32,
-        norm_eps: float = 1e-6,
+        norm_eps: float = 1e-5,
         num_head_channels: int = 1,
+        upcast_attention: bool = False,
         include_fc: bool = True,
         use_combined_linear: bool = False,
         use_flash_attention: bool = False,
@@ -818,6 +828,7 @@ class AttnMidBlock(nn.Module):
             num_head_channels=num_head_channels,
             norm_num_groups=norm_num_groups,
             norm_eps=norm_eps,
+            attention_dtype=torch.float if upcast_attention else None,
             include_fc=include_fc,
             use_combined_linear=use_combined_linear,
             use_flash_attention=use_flash_attention,
@@ -869,7 +880,7 @@ class CrossAttnMidBlock(nn.Module):
         in_channels: int,
         temb_channels: int,
         norm_num_groups: int = 32,
-        norm_eps: float = 1e-6,
+        norm_eps: float = 1e-5,
         num_head_channels: int = 1,
         transformer_num_layers: int = 1,
         cross_attention_dim: int | None = None,
@@ -949,7 +960,7 @@ class UpBlock(nn.Module):
         temb_channels: int,
         num_res_blocks: int = 1,
         norm_num_groups: int = 32,
-        norm_eps: float = 1e-6,
+        norm_eps: float = 1e-5,
         add_upsample: bool = True,
         resblock_updown: bool = False,
     ) -> None:
@@ -1048,6 +1059,7 @@ class AttnUpBlock(nn.Module):
         add_upsample: if True add downsample block.
         resblock_updown: if True use residual blocks for upsampling.
         num_head_channels: number of channels in each attention head.
+        upcast_attention: if True, upcast attention operations to full precision.
         include_fc: whether to include the final linear layer. Default to True.
         use_combined_linear: whether to use a single linear layer for qkv projection, default to False.
         use_flash_attention: if True, use Pytorch's inbuilt flash attention for a memory efficient attention mechanism
@@ -1063,10 +1075,11 @@ class AttnUpBlock(nn.Module):
         temb_channels: int,
         num_res_blocks: int = 1,
         norm_num_groups: int = 32,
-        norm_eps: float = 1e-6,
+        norm_eps: float = 1e-5,
         add_upsample: bool = True,
         resblock_updown: bool = False,
         num_head_channels: int = 1,
+        upcast_attention: bool = False,
         include_fc: bool = True,
         use_combined_linear: bool = False,
         use_flash_attention: bool = False,
@@ -1098,6 +1111,7 @@ class AttnUpBlock(nn.Module):
                     num_head_channels=num_head_channels,
                     norm_num_groups=norm_num_groups,
                     norm_eps=norm_eps,
+                    attention_dtype=torch.float if upcast_attention else None,
                     include_fc=include_fc,
                     use_combined_linear=use_combined_linear,
                     use_flash_attention=use_flash_attention,
@@ -1201,7 +1215,7 @@ class CrossAttnUpBlock(nn.Module):
         temb_channels: int,
         num_res_blocks: int = 1,
         norm_num_groups: int = 32,
-        norm_eps: float = 1e-6,
+        norm_eps: float = 1e-5,
         add_upsample: bool = True,
         resblock_updown: bool = False,
         num_head_channels: int = 1,
@@ -1345,6 +1359,7 @@ def get_down_block(
             add_downsample=add_downsample,
             resblock_updown=resblock_updown,
             num_head_channels=num_head_channels,
+            upcast_attention=upcast_attention,
             include_fc=include_fc,
             use_combined_linear=use_combined_linear,
             use_flash_attention=use_flash_attention,
@@ -1423,6 +1438,7 @@ def get_mid_block(
             norm_num_groups=norm_num_groups,
             norm_eps=norm_eps,
             num_head_channels=num_head_channels,
+            upcast_attention=upcast_attention,
             include_fc=include_fc,
             use_combined_linear=use_combined_linear,
             use_flash_attention=use_flash_attention,
@@ -1464,6 +1480,7 @@ def get_up_block(
             add_upsample=add_upsample,
             resblock_updown=resblock_updown,
             num_head_channels=num_head_channels,
+            upcast_attention=upcast_attention,
             include_fc=include_fc,
             use_combined_linear=use_combined_linear,
             use_flash_attention=use_flash_attention,
@@ -1543,7 +1560,7 @@ class DiffusionModelUNet(nn.Module):
         channels: Sequence[int] = (32, 64, 64, 64),
         attention_levels: Sequence[bool] = (False, False, True, True),
         norm_num_groups: int = 32,
-        norm_eps: float = 1e-6,
+        norm_eps: float = 1e-5,
         resblock_updown: bool = False,
         num_head_channels: int | Sequence[int] = 8,
         with_conditioning: bool = False,
@@ -1749,21 +1766,17 @@ class DiffusionModelUNet(nn.Module):
             mid_block_additional_residual: additional residual tensor for mid block (N, C, FeatureMapsDims).
         """
         # 1. time
-        t_emb = get_timestep_embedding(timesteps, self.block_out_channels[0])
-
-        # timesteps does not contain any weights and will always return f32 tensors
-        # but time_embedding might actually be running in fp16. so we need to cast here.
-        # there might be better ways to encapsulate this.
-        t_emb = t_emb.to(dtype=x.dtype)
-        emb = self.time_embed(t_emb)
+        with torch.autocast(device_type=x.device.type, enabled=False):
+            t_emb = get_timestep_embedding(timesteps, self.block_out_channels[0])
+            emb = self.time_embed(t_emb.float())
 
         # 2. class
         if self.num_class_embeds is not None:
             if class_labels is None:
                 raise ValueError("class_labels should be provided when num_class_embeds > 0")
-            class_emb = self.class_embedding(class_labels)
-            class_emb = class_emb.to(dtype=x.dtype)
-            emb = emb + class_emb
+            with torch.autocast(device_type=x.device.type, enabled=False):
+                class_emb = self.class_embedding(class_labels)
+                emb = emb + class_emb.float()
 
         # 3. initial convolution
         h = self.conv_in(x)
@@ -1908,7 +1921,7 @@ class DiffusionModelEncoder(nn.Module):
         channels: Sequence[int] = (32, 64, 64, 64),
         attention_levels: Sequence[bool] = (False, False, True, True),
         norm_num_groups: int = 32,
-        norm_eps: float = 1e-6,
+        norm_eps: float = 1e-5,
         resblock_updown: bool = False,
         num_head_channels: int | Sequence[int] = 8,
         with_conditioning: bool = False,
